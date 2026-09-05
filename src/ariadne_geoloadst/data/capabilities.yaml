@@ -1,0 +1,353 @@
+catalog_version: geoloadst-capabilities-1
+capabilities:
+  - capability_id: load_instability_rms
+    name: RMS load instability
+    kind: primitive
+    analytical_goal: load_instability
+    suitable_intents: [instability, fluctuation, variability, rms]
+    description: >-
+      Per-node RMS of temporally and spatially detrended load. This is a load
+      fluctuation score, not transient or frequency stability.
+    required_data:
+      - requirement_id: load_time_series
+        kind: load_time_series
+        description: Per-bus load time series (N nodes by T steps).
+      - requirement_id: node_coordinates
+        kind: node_coordinates
+        description: Bus coordinates used for spatial detrending.
+    geoloadst_binding: geoloadst.core.instability_index.rms_instability
+    output_semantics: Per-node non-negative RMS instability index
+    units: dimensionless_rms
+    limitations:
+      - Measures load-profile fluctuation after detrend/standardize, not electrical stability.
+      - Sensitive to time-window length and ROI/subsample bounds.
+    parameters:
+      - name: dt_minutes
+        description: Profile time step in minutes.
+        default: 15.0
+    status: declared
+
+  - capability_id: load_rate_of_change
+    name: Load rate of change
+    kind: primitive
+    analytical_goal: load_instability
+    suitable_intents: [rate of change, rocol, change]
+    description: Mean absolute first difference of the load series (RoCoL-style).
+    required_data:
+      - requirement_id: load_time_series
+        kind: load_time_series
+        description: Per-bus load or detrended load series.
+    geoloadst_binding: geoloadst.core.instability_index.rate_of_change
+    output_semantics: Per-node mean absolute temporal difference
+    units: load_units_per_step
+    limitations:
+      - Not a system Rate of Change of Frequency (RoCoF) metric.
+    status: declared
+
+  - capability_id: load_oscillation_rate
+    name: Load oscillation rate
+    kind: primitive
+    analytical_goal: load_instability
+    suitable_intents: [oscillation, sign change]
+    description: Fraction of sign changes in a node's (optionally detrended) series.
+    required_data:
+      - requirement_id: load_time_series
+        kind: load_time_series
+        description: Per-bus series used to count sign flips.
+    geoloadst_binding: geoloadst.core.instability_index.oscillation_rate
+    output_semantics: Per-node oscillation rate in [0, 1]
+    units: fraction
+    limitations:
+      - Counts sign flips; it is not a modal or protection oscillation study.
+    status: declared
+
+  - capability_id: critical_node_classification
+    name: Critical load-instability nodes
+    kind: primitive
+    analytical_goal: critical_node_detection
+    suitable_intents: [critical, highest instability, unstable nodes]
+    description: Threshold the RMS instability distribution (default 90th percentile).
+    required_data:
+      - requirement_id: load_time_series
+        kind: load_time_series
+        description: Series used to compute RMS instability first.
+      - requirement_id: node_coordinates
+        kind: node_coordinates
+        description: Coordinates aligned with the instability vector.
+    geoloadst_binding: geoloadst.core.instability_index.classify_critical_nodes
+    output_semantics: Boolean mask, indices, and threshold
+    units: dimensionless
+    limitations:
+      - Critical here means a high load-instability score, not N-1 or protection criticality.
+    parameters:
+      - name: unstable_quantile
+        description: Quantile used when no absolute threshold is given.
+        default: 0.9
+    prerequisites: [load_instability_rms]
+    status: declared
+
+  - capability_id: global_moran_instability
+    name: Global Moran I of load instability
+    kind: primitive
+    analytical_goal: spatial_autocorrelation
+    suitable_intents: [clustered, spatial autocorrelation, moran]
+    description: Global Moran's I on the RMS instability field using KNN weights.
+    required_data:
+      - requirement_id: node_coordinates
+        kind: node_coordinates
+        description: Coordinates for KNN spatial weights.
+      - requirement_id: load_time_series
+        kind: load_time_series
+        description: Series used to derive the instability field.
+    geoloadst_binding: geoloadst.core.moran.global_moran
+    output_semantics: Global Moran statistic and permutation diagnostics
+    units: morans_i
+    limitations:
+      - Spatial weights are k-nearest neighbors on coordinates, not electrical distance.
+      - Requires a computed instability field of matching length.
+    parameters:
+      - name: k_neighbors
+        description: Number of nearest neighbors for spatial weights.
+        default: 8
+      - name: permutations
+        description: Permutation count for inference.
+        default: 999
+    prerequisites: [load_instability_rms]
+    status: declared
+
+  - capability_id: lisa_instability
+    name: Local Moran LISA of load instability
+    kind: primitive
+    analytical_goal: local_hotspot_detection
+    suitable_intents: [hotspot, lisa, local cluster]
+    description: >-
+      Local Indicators of Spatial Association. Codes 0=NS, 1=HH, 2=LL, 3=LH, 4=HL.
+    required_data:
+      - requirement_id: node_coordinates
+        kind: node_coordinates
+        description: Coordinates for KNN weights.
+      - requirement_id: load_time_series
+        kind: load_time_series
+        description: Series used to derive instability or mean load.
+    geoloadst_binding: geoloadst.core.moran.local_moran_clusters
+    output_semantics: Per-node LISA cluster codes
+    units: lisa_class
+    limitations:
+      - Hotspots are statistical LISA classes, not protection zones.
+    parameters:
+      - name: k_neighbors
+        description: Number of nearest neighbors.
+        default: 8
+    prerequisites: [load_instability_rms]
+    status: declared
+
+  - capability_id: moran_time_series
+    name: Moran I time series of load
+    kind: primitive
+    analytical_goal: spatial_autocorrelation
+    suitable_intents: [change over time, temporal pattern, moran series]
+    description: Global Moran's I of the load snapshot at every time step.
+    required_data:
+      - requirement_id: load_time_series
+        kind: load_time_series
+        description: Time-indexed load table (rows = time, columns = buses).
+      - requirement_id: node_coordinates
+        kind: node_coordinates
+        description: Coordinates for a single shared spatial weights matrix.
+    geoloadst_binding: geoloadst.core.moran.moran_time_series
+    output_semantics: One Moran I value per time step
+    units: morans_i
+    limitations:
+      - Describes changing spatial autocorrelation of load, not dynamics of the grid model.
+    status: declared
+
+  - capability_id: space_time_variogram
+    name: Space-time variogram of load anomalies
+    kind: primitive
+    analytical_goal: spatiotemporal_range
+    suitable_intents: [spatial range, temporal range, variogram, stv]
+    description: Bounded SpaceTimeVariogram fit with spatial and temporal range estimates.
+    required_data:
+      - requirement_id: load_time_series
+        kind: load_time_series
+        description: Detrended standardized load field (N, T).
+      - requirement_id: node_coordinates
+        kind: node_coordinates
+        description: Bus coordinates in the same CRS as the SimBench case.
+    geoloadst_binding: geoloadst.core.spatiotemporal.compute_stv
+    output_semantics: Spatial range, temporal range (steps and hours), marginal variograms
+    units: mixed_range
+    limitations:
+      - Pairwise STV is memory-heavy; GeoLoadST bounds buses, times, and pairs.
+      - Ranges are geostatistical correlation lengths, not electrical transfer distances.
+    parameters:
+      - name: max_buses
+        description: Upper bound on buses used for STV.
+        default: 200
+      - name: max_times
+        description: Upper bound on time steps.
+        default: 48
+      - name: max_pairs
+        description: Pair budget for the variogram.
+        default: 50000
+    status: declared
+
+  - capability_id: directional_variogram
+    name: Directional variogram of instability
+    kind: primitive
+    analytical_goal: directional_structure
+    suitable_intents: [anisotropy, directional, azimuth]
+    description: Directional variograms and major/minor azimuth of the instability field.
+    required_data:
+      - requirement_id: node_coordinates
+        kind: node_coordinates
+        description: Coordinates for directional lags.
+    geoloadst_binding: geoloadst.core.spatiotemporal.compute_directional_variograms
+    output_semantics: Per-azimuth ranges, major/minor azimuth, global ellipse axes
+    units: coordinate_units
+    limitations:
+      - Requires a prior instability field; default angles are 0/45/90/135 degrees.
+    prerequisites: [load_instability_rms]
+    status: declared
+
+  - capability_id: topology_centrality
+    name: Network topology centrality
+    kind: primitive
+    analytical_goal: topology_importance
+    suitable_intents: [centrality, structurally important, topology]
+    description: Degree, betweenness, and closeness on the pandapower line/transformer graph.
+    required_data:
+      - requirement_id: network_topology
+        kind: network_topology
+        description: pandapower network with lines and optional transformers.
+    geoloadst_binding: geoloadst.core.topology.compute_topological_metrics
+    output_semantics: Per-bus degree, betweenness, and closeness
+    units: graph_centrality
+    limitations:
+      - Graph distance uses line length_km when present, not impedance or operational state.
+    status: declared
+
+  - capability_id: instability_topology_correlation
+    name: Instability–topology correlation
+    kind: primitive
+    analytical_goal: instability_topology_relationship
+    suitable_intents: [structurally important and unstable, correlation]
+    description: Pearson correlation between RMS instability and each centrality vector.
+    required_data:
+      - requirement_id: load_time_series
+        kind: load_time_series
+        description: Series for RMS instability.
+      - requirement_id: network_topology
+        kind: network_topology
+        description: Graph used for centrality.
+    geoloadst_binding: geoloadst.core.topology.correlate_instability_topology
+    output_semantics: Correlation coefficients for degree, betweenness, closeness
+    units: pearson_r
+    limitations:
+      - Linear correlation only; does not prove causal electrical dependence.
+    prerequisites: [load_instability_rms, topology_centrality]
+    status: declared
+
+  - capability_id: vulnerability_index
+    name: Instability–degree vulnerability index
+    kind: primitive
+    analytical_goal: instability_topology_relationship
+    suitable_intents: [vulnerability, critical and unstable]
+    description: Weighted blend of min-max normalized instability and degree.
+    required_data:
+      - requirement_id: load_time_series
+        kind: load_time_series
+        description: Series for RMS instability.
+      - requirement_id: network_topology
+        kind: network_topology
+        description: Graph for degree.
+    geoloadst_binding: geoloadst.core.resilience.vulnerability_index
+    output_semantics: Per-node blended vulnerability score in about [0, 1]
+    units: dimensionless
+    limitations:
+      - A simple linear blend, not a published resilience standard or N-k index.
+    prerequisites: [load_instability_rms, topology_centrality]
+    status: declared
+
+  - capability_id: multidim_pca_clustering
+    name: Multidimensional instability PCA and clustering
+    kind: primitive
+    analytical_goal: multidimensional_structure
+    suitable_intents: [pca, clustering, feature mix]
+    description: RMS, RoCoL, and oscillation features, then PCA and KMeans.
+    required_data:
+      - requirement_id: load_time_series
+        kind: load_time_series
+        description: Load table used to build the feature matrix.
+    geoloadst_binding: geoloadst.core.multidim_instability.pca_and_cluster
+    output_semantics: Feature matrix, PCA coordinates, cluster labels, cluster summary
+    units: mixed
+    limitations:
+      - Optional voltage_std/voltage_sag exist in the API but are not supplied by InstabilityAnalyzer.
+      - Cluster count is a parameter, not an inferred number of operating states.
+    parameters:
+      - name: n_clusters
+        description: KMeans cluster count.
+        default: 3
+      - name: n_pca_components
+        description: PCA components.
+        default: 2
+    status: declared
+
+  - capability_id: industrial_daynight_scenario
+    name: Industrial day/night load scenario
+    kind: primitive
+    analytical_goal: scenario_comparison
+    suitable_intents: [scenario, day night, industrial]
+    description: Scale a detected industrial cluster by day/night factors and compare Moran/LISA.
+    required_data:
+      - requirement_id: load_time_series
+        kind: load_time_series
+        description: Baseline bus load profiles.
+      - requirement_id: node_coordinates
+        kind: node_coordinates
+        description: Coordinates for clustering the industrial subset.
+      - requirement_id: scenario_parameters
+        kind: scenario_parameters
+        optional: true
+        description: Day/night hours and scale factors.
+    geoloadst_binding: geoloadst.scenarios.industrial_daynight.apply_industrial_daynight_pattern
+    output_semantics: Scenario load table, Moran comparison, midday LISA comparison
+    units: mixed
+    limitations:
+      - Synthetic scaling of profiles, not a market or contingency simulation.
+    parameters:
+      - name: day_factor
+        description: Daytime industrial scale factor.
+        default: 3.0
+      - name: night_factor
+        description: Night-time industrial scale factor.
+        default: 0.3
+    status: declared
+
+  - capability_id: spatial_clustering_of_instability
+    name: Spatial clustering workflow for instability
+    kind: workflow
+    analytical_goal: spatial_autocorrelation
+    suitable_intents: [are unstable areas clustered, spatial cluster]
+    description: >-
+      Declared workflow: RMS instability, then Global Moran and optional LISA.
+      Execution binding is added in a later phase.
+    required_data:
+      - requirement_id: load_time_series
+        kind: load_time_series
+        description: Per-bus load profiles.
+      - requirement_id: node_coordinates
+        kind: node_coordinates
+        description: Bus coordinates.
+      - requirement_id: simbench_network
+        kind: simbench_network
+        optional: true
+        description: SimBench code when the host has not already supplied a net.
+    geoloadst_binding: geoloadst.api.InstabilityAnalyzer.compute_moran_analysis
+    output_semantics: Instability field plus global Moran and LISA cluster codes
+    units: mixed
+    limitations:
+      - Workflow selection is catalog-only; the host must not invent extra steps.
+    prerequisites: [load_instability_rms, global_moran_instability, lisa_instability]
+    status: declared

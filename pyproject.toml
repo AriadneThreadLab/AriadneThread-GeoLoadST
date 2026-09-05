@@ -1,0 +1,82 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ariadne-geoloadst"
+version = "0.1.0"
+description = "Integration plugin connecting Ariadne Thread to the GeoLoadST scientific library."
+readme = "README.md"
+requires-python = ">=3.10,<3.11"
+license = { text = "MIT" }
+authors = [
+    { name = "AriadneThreadLab" },
+]
+keywords = [
+    "ariadne-thread",
+    "geoloadst",
+    "geospatial",
+    "energy",
+    "plugin",
+    "research-software",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.10",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "pydantic>=2.7,<3",
+    "pyyaml>=6,<7",
+]
+
+[project.optional-dependencies]
+# Scientific engine. Do not pin a local filesystem path here.
+# Local development: pip install -e ../geoloadst
+# Reproducible install: pip install -e ".[scientific]"
+scientific = [
+    "geoloadst @ git+https://github.com/GeoLoadSTLab/geoloadst.git@v0.1.1",
+]
+dev = [
+    "pytest>=8.2,<9",
+    "ruff>=0.5,<0.13",
+    "mypy>=1.10,<2",
+    "types-PyYAML>=6,<7",
+]
+
+[project.urls]
+Homepage = "https://github.com/AriadneThreadLab/AriadneThread-GeoLoadST"
+Repository = "https://github.com/AriadneThreadLab/AriadneThread-GeoLoadST"
+Related-Ariadne = "https://github.com/AriadneThreadLab/AriadneThread"
+Related-GeoLoadST = "https://github.com/GeoLoadSTLab/geoloadst"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+"ariadne_geoloadst" = ["data/*.yaml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["error::DeprecationWarning:ariadne_geoloadst.*"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "ANN", "RUF"]
+ignore = ["ANN401"]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ANN001", "ANN002", "ANN003", "ANN201", "ANN202", "ANN204"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+warn_unused_configs = true
+mypy_path = "src"
+files = ["src", "tests"]
