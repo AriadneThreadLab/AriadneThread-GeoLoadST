@@ -11,7 +11,7 @@ Recommended sibling layout (paths are examples, never hardcoded in code):
 
 Python **3.10** only, to match Ariadne Thread.
 
-## Plugin package (no GeoLoadST)
+## Plugin package
 
 ```bash
 cd ~/projects/AriadneThread-GeoLoadST
@@ -24,8 +24,9 @@ python3.10 -m venv .venv
 ./.venv/bin/mypy src tests
 ```
 
-Energy analysis reports `package_missing`. Ariadne OSM workflows stay
-independent.
+``pip install -e .`` pulls `geoloadst` from the pinned GitHub tag. The plugin
+still imports that engine lazily, so listing capabilities does not load
+pandas/pandapower. Ariadne OSM workflows stay independent.
 
 ## Editable GeoLoadST (active science development)
 
@@ -43,11 +44,9 @@ Do not commit that filesystem path.
 ./.venv/bin/pip install -e ".[scientific]"
 ```
 
-This pins
+is now an alias of the default install. Both pin
 
 `geoloadst @ git+https://github.com/GeoLoadSTLab/geoloadst.git@v0.1.1`
-
-and pulls GeoLoadST's own dependencies (`simbench`, `pandapower`, …).
 
 ## GitHub remote (manual)
 

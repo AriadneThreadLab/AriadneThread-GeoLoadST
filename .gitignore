@@ -13,6 +13,8 @@ venv/
 .env
 .env.*
 !.env.example
+.docs/
+/docs
 
 # Tooling caches
 .pytest_cache/

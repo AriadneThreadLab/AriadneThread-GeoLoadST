@@ -1,3 +1,13 @@
+# Capability catalog for the GeoLoadST engine.
+#
+# Every `geoloadst_binding` names a callable that exists in
+# GeoLoadSTLab/geoloadst at main 079dc2cb (tags v0.1.0, v0.1.1).
+# Every `engine_call.steps[*].method` is a real method of
+# geoloadst.api.InstabilityAnalyzer, and parameter defaults repeat that
+# method's own documented defaults; the plugin does not invent values.
+#
+# status: bound     -> an engine plan exists and execute() will dispatch
+# status: declared  -> catalogued and selectable, dispatch not wired yet
 catalog_version: geoloadst-capabilities-1
 capabilities:
   - capability_id: load_instability_rms
@@ -21,11 +31,38 @@ capabilities:
     limitations:
       - Measures load-profile fluctuation after detrend/standardize, not electrical stability.
       - Sensitive to time-window length and ROI/subsample bounds.
+      - The engine keeps the highest-mean-load buses when max_buses is exceeded.
     parameters:
-      - name: dt_minutes
-        description: Profile time step in minutes.
-        default: 15.0
-    status: declared
+      - name: max_buses
+        description: Keep at most this many highest-mean-load buses.
+        default: 500
+        minimum: 8
+        maximum: 5000
+      - name: max_times
+        description: Trim the profile to this many time steps.
+        default: 96
+        minimum: 4
+        maximum: 35040
+      - name: max_pairs
+        description: Pair budget for the space-time variogram fitted in the same step.
+        default: 200000
+        minimum: 1000
+        maximum: 2000000
+      - name: random_state
+        description: Seed for subsampling, recorded for reproducibility.
+        default: 42
+        minimum: 0
+    engine_call:
+      steps:
+        - method: compute_spatiotemporal_instability
+          purpose: Detrend, standardize and score per-bus RMS instability.
+          parameter_map:
+            max_buses: max_buses
+            max_times: max_times
+            max_pairs: max_pairs
+            random_state: random_state
+      result_keys: [instability_index, bus_ids_used, threshold]
+    status: bound
 
   - capability_id: load_rate_of_change
     name: Load rate of change
@@ -42,6 +79,7 @@ capabilities:
     units: load_units_per_step
     limitations:
       - Not a system Rate of Change of Frequency (RoCoF) metric.
+      - InstabilityAnalyzer exposes this only inside the multidimensional feature matrix.
     status: declared
 
   - capability_id: load_oscillation_rate
@@ -59,6 +97,7 @@ capabilities:
     units: fraction
     limitations:
       - Counts sign flips; it is not a modal or protection oscillation study.
+      - InstabilityAnalyzer exposes this only inside the multidimensional feature matrix.
     status: declared
 
   - capability_id: critical_node_classification
@@ -75,16 +114,38 @@ capabilities:
         kind: node_coordinates
         description: Coordinates aligned with the instability vector.
     geoloadst_binding: geoloadst.core.instability_index.classify_critical_nodes
-    output_semantics: Boolean mask, indices, and threshold
+    output_semantics: Boolean mask, indices, critical bus ids and threshold
     units: dimensionless
     limitations:
       - Critical here means a high load-instability score, not N-1 or protection criticality.
+      - The threshold is relative to the analysed subset, not to an absolute engineering limit.
     parameters:
       - name: unstable_quantile
         description: Quantile used when no absolute threshold is given.
         default: 0.9
+        minimum: 0.5
+        maximum: 0.999
+      - name: max_buses
+        description: Keep at most this many highest-mean-load buses.
+        default: 500
+        minimum: 8
+        maximum: 5000
+      - name: max_times
+        description: Trim the profile to this many time steps.
+        default: 96
+        minimum: 4
+        maximum: 35040
+    engine_call:
+      steps:
+        - method: compute_spatiotemporal_instability
+          purpose: Score instability and flag the upper tail as critical.
+          parameter_map:
+            unstable_quantile: unstable_quantile
+            max_buses: max_buses
+            max_times: max_times
+      result_keys: [critical_mask, critical_indices, critical_bus_ids, threshold]
     prerequisites: [load_instability_rms]
-    status: declared
+    status: bound
 
   - capability_id: global_moran_instability
     name: Global Moran I of load instability
@@ -104,16 +165,28 @@ capabilities:
     units: morans_i
     limitations:
       - Spatial weights are k-nearest neighbors on coordinates, not electrical distance.
-      - Requires a computed instability field of matching length.
+      - Inference is permutation-based; p-values depend on the permutation count.
     parameters:
       - name: k_neighbors
         description: Number of nearest neighbors for spatial weights.
         default: 8
+        minimum: 2
+        maximum: 50
       - name: permutations
         description: Permutation count for inference.
         default: 999
+        minimum: 0
+        maximum: 9999
+    engine_call:
+      steps:
+        - method: compute_moran_analysis
+          purpose: Build KNN weights and run global Moran on mean load and instability.
+          parameter_map:
+            k_neighbors: k_neighbors
+            permutations: permutations
+      result_keys: [moran_instability, moran_mean_load]
     prerequisites: [load_instability_rms]
-    status: declared
+    status: bound
 
   - capability_id: lisa_instability
     name: Local Moran LISA of load instability
@@ -130,16 +203,39 @@ capabilities:
         kind: load_time_series
         description: Series used to derive instability or mean load.
     geoloadst_binding: geoloadst.core.moran.local_moran_clusters
-    output_semantics: Per-node LISA cluster codes
+    output_semantics: Per-node LISA cluster codes with their label map
     units: lisa_class
     limitations:
       - Hotspots are statistical LISA classes, not protection zones.
+      - Class codes are only interpretable together with the returned label map.
     parameters:
       - name: k_neighbors
         description: Number of nearest neighbors.
         default: 8
+        minimum: 2
+        maximum: 50
+      - name: permutations
+        description: Permutation count for inference.
+        default: 999
+        minimum: 0
+        maximum: 9999
+    engine_call:
+      steps:
+        - method: compute_moran_analysis
+          purpose: Run LISA on mean load and on the instability field.
+          parameter_map:
+            k_neighbors: k_neighbors
+            permutations: permutations
+      result_keys:
+        [
+          clusters_instability,
+          clusters_mean_load,
+          cluster_labels_map,
+          moran_instability,
+          lisa_instability,
+        ]
     prerequisites: [load_instability_rms]
-    status: declared
+    status: bound
 
   - capability_id: moran_time_series
     name: Moran I time series of load
@@ -159,6 +255,7 @@ capabilities:
     units: morans_i
     limitations:
       - Describes changing spatial autocorrelation of load, not dynamics of the grid model.
+      - InstabilityAnalyzer has no method for it; a provider must pass weights explicitly.
     status: declared
 
   - capability_id: space_time_variogram
@@ -175,22 +272,55 @@ capabilities:
         kind: node_coordinates
         description: Bus coordinates in the same CRS as the SimBench case.
     geoloadst_binding: geoloadst.core.spatiotemporal.compute_stv
-    output_semantics: Spatial range, temporal range (steps and hours), marginal variograms
+    output_semantics: Spatial range, temporal range in steps and hours, valid lag bounds
     units: mixed_range
     limitations:
       - Pairwise STV is memory-heavy; GeoLoadST bounds buses, times, and pairs.
       - Ranges are geostatistical correlation lengths, not electrical transfer distances.
+      - Ranges are NaN when the variogram cannot be fitted; the plugin reports them as absent.
     parameters:
+      - name: x_lags
+        description: Number of spatial lag classes.
+        default: 12
+        minimum: 3
+        maximum: 60
+      - name: t_lags
+        description: Number of temporal lag classes.
+        default: 8
+        minimum: 3
+        maximum: 60
       - name: max_buses
         description: Upper bound on buses used for STV.
-        default: 200
+        default: 500
+        minimum: 8
+        maximum: 5000
       - name: max_times
         description: Upper bound on time steps.
-        default: 48
+        default: 96
+        minimum: 4
+        maximum: 35040
       - name: max_pairs
         description: Pair budget for the variogram.
-        default: 50000
-    status: declared
+        default: 200000
+        minimum: 1000
+        maximum: 2000000
+    engine_call:
+      steps:
+        - method: compute_spatiotemporal_instability
+          purpose: Fit the bounded space-time variogram of the detrended field.
+          parameter_map:
+            x_lags: x_lags
+            t_lags: t_lags
+            max_buses: max_buses
+            max_times: max_times
+            max_pairs: max_pairs
+      result_keys:
+        - stv.space_range
+        - stv.time_range_steps
+        - stv.time_range_hours
+        - stv.max_valid_space_lag
+        - stv.max_valid_time_lag
+    status: bound
 
   - capability_id: directional_variogram
     name: Directional variogram of instability
@@ -202,13 +332,104 @@ capabilities:
       - requirement_id: node_coordinates
         kind: node_coordinates
         description: Coordinates for directional lags.
+      - requirement_id: load_time_series
+        kind: load_time_series
+        description: Series used to derive the instability field first.
     geoloadst_binding: geoloadst.core.spatiotemporal.compute_directional_variograms
     output_semantics: Per-azimuth ranges, major/minor azimuth, global ellipse axes
     units: coordinate_units
     limitations:
-      - Requires a prior instability field; default angles are 0/45/90/135 degrees.
+      - Requires a prior instability field; default azimuths are 0/45/90/135 degrees.
+      - Azimuth selection is fixed by the engine default and is not exposed as a parameter.
+    parameters:
+      - name: max_buses
+        description: Upper bound on buses in the preceding instability step.
+        default: 500
+        minimum: 8
+        maximum: 5000
+      - name: tolerance_deg
+        description: Angular tolerance around each azimuth.
+        default: 22.5
+        minimum: 1.0
+        maximum: 90.0
+      - name: n_lags
+        description: Number of lag classes per direction.
+        default: 8
+        minimum: 3
+        maximum: 60
+      - name: model
+        description: Variogram model fitted per direction.
+        default: spherical
+        choices: [spherical, exponential, gaussian, matern, stable]
+    engine_call:
+      steps:
+        - method: compute_spatiotemporal_instability
+          purpose: Produce the instability field the directional fit needs.
+          parameter_map:
+            max_buses: max_buses
+        - method: compute_directional_variograms
+          purpose: Fit one variogram per azimuth and report the anisotropy ellipse.
+          parameter_map:
+            tolerance_deg: tolerance_deg
+            n_lags: n_lags
+            model: model
+      result_keys: [ranges, major_azimuth, minor_azimuth, a_global, b_global, angle_global]
     prerequisites: [load_instability_rms]
-    status: declared
+    status: bound
+
+  - capability_id: local_anisotropy
+    name: Local anisotropy around critical nodes
+    kind: primitive
+    analytical_goal: directional_structure
+    suitable_intents: [local anisotropy, footprint, ellipse]
+    description: Local directional variograms around the top critical nodes.
+    required_data:
+      - requirement_id: node_coordinates
+        kind: node_coordinates
+        description: Coordinates for local neighbourhoods.
+      - requirement_id: load_time_series
+        kind: load_time_series
+        description: Series used to derive instability and the critical mask.
+    geoloadst_binding: geoloadst.core.spatiotemporal.compute_local_variograms
+    output_semantics: Per-node local isotropic range and local ellipse axes and angle
+    units: coordinate_units
+    limitations:
+      - Only the first few critical nodes are analysed; other nodes stay unset.
+      - Local fits use k nearest neighbours, so results depend on local bus density.
+    parameters:
+      - name: max_crit_local
+        description: How many critical nodes to analyse.
+        default: 5
+        minimum: 1
+        maximum: 50
+      - name: k_local
+        description: Neighbours per local variogram.
+        default: 40
+        minimum: 5
+        maximum: 500
+      - name: n_lags
+        description: Number of local lag classes.
+        default: 5
+        minimum: 3
+        maximum: 30
+      - name: model
+        description: Variogram model fitted locally.
+        default: spherical
+        choices: [spherical, exponential, gaussian, matern, stable]
+    engine_call:
+      steps:
+        - method: compute_spatiotemporal_instability
+          purpose: Produce the instability field and the critical mask.
+        - method: compute_local_anisotropy
+          purpose: Fit local directional variograms around critical nodes.
+          parameter_map:
+            max_crit_local: max_crit_local
+            k_local: k_local
+            n_lags: n_lags
+            model: model
+      result_keys: [local_iso, local_a, local_b, local_angle]
+    prerequisites: [critical_node_classification]
+    status: bound
 
   - capability_id: topology_centrality
     name: Network topology centrality
@@ -225,10 +446,16 @@ capabilities:
     units: graph_centrality
     limitations:
       - Graph distance uses line length_km when present, not impedance or operational state.
-    status: declared
+      - Switching state and outages are not modelled.
+    engine_call:
+      steps:
+        - method: compute_topology_analysis
+          purpose: Build the bus graph and compute centralities.
+      result_keys: [metrics]
+    status: bound
 
   - capability_id: instability_topology_correlation
-    name: Instability–topology correlation
+    name: Instability-topology correlation
     kind: primitive
     analytical_goal: instability_topology_relationship
     suitable_intents: [structurally important and unstable, correlation]
@@ -245,11 +472,17 @@ capabilities:
     units: pearson_r
     limitations:
       - Linear correlation only; does not prove causal electrical dependence.
+      - Returns NaN for a centrality with zero variance; the plugin reports it as absent.
+    engine_call:
+      steps:
+        - method: compute_topology_analysis
+          purpose: Correlate the instability field with each centrality.
+      result_keys: [correlations]
     prerequisites: [load_instability_rms, topology_centrality]
-    status: declared
+    status: bound
 
   - capability_id: vulnerability_index
-    name: Instability–degree vulnerability index
+    name: Instability-degree vulnerability index
     kind: primitive
     analytical_goal: instability_topology_relationship
     suitable_intents: [vulnerability, critical and unstable]
@@ -266,6 +499,7 @@ capabilities:
     units: dimensionless
     limitations:
       - A simple linear blend, not a published resilience standard or N-k index.
+      - InstabilityAnalyzer has no method for it; a provider must pass both vectors.
     prerequisites: [load_instability_rms, topology_centrality]
     status: declared
 
@@ -280,7 +514,7 @@ capabilities:
         kind: load_time_series
         description: Load table used to build the feature matrix.
     geoloadst_binding: geoloadst.core.multidim_instability.pca_and_cluster
-    output_semantics: Feature matrix, PCA coordinates, cluster labels, cluster summary
+    output_semantics: Feature names, cluster labels, explained variance, cluster summary
     units: mixed
     limitations:
       - Optional voltage_std/voltage_sag exist in the API but are not supplied by InstabilityAnalyzer.
@@ -289,10 +523,27 @@ capabilities:
       - name: n_clusters
         description: KMeans cluster count.
         default: 3
+        minimum: 2
+        maximum: 20
       - name: n_pca_components
         description: PCA components.
         default: 2
-    status: declared
+        minimum: 1
+        maximum: 5
+    engine_call:
+      steps:
+        - method: compute_multidim_instability
+          purpose: Build instability features, then run PCA and KMeans.
+          parameter_map:
+            n_clusters: n_clusters
+            n_pca_components: n_pca_components
+      result_keys:
+        - feature_names
+        - cluster_summary
+        - pca_results.cluster_labels
+        - pca_results.explained_variance_ratio
+        - pca_results.cumulative_variance
+    status: bound
 
   - capability_id: industrial_daynight_scenario
     name: Industrial day/night load scenario
@@ -312,18 +563,49 @@ capabilities:
         optional: true
         description: Day/night hours and scale factors.
     geoloadst_binding: geoloadst.scenarios.industrial_daynight.apply_industrial_daynight_pattern
-    output_semantics: Scenario load table, Moran comparison, midday LISA comparison
+    output_semantics: Moran comparison, midday LISA comparison and the midday time index
     units: mixed
     limitations:
       - Synthetic scaling of profiles, not a market or contingency simulation.
+      - The industrial cluster is detected by KMeans on coordinates and mean load, not by tariff data.
     parameters:
+      - name: n_clusters
+        description: Cluster count used to detect the industrial subset.
+        default: 3
+        minimum: 2
+        maximum: 20
+      - name: day_start_h
+        description: Start hour of the daytime window.
+        default: 8.0
+        minimum: 0.0
+        maximum: 24.0
+      - name: day_end_h
+        description: End hour of the daytime window.
+        default: 20.0
+        minimum: 0.0
+        maximum: 24.0
       - name: day_factor
         description: Daytime industrial scale factor.
         default: 3.0
+        minimum: 0.0
+        maximum: 100.0
       - name: night_factor
         description: Night-time industrial scale factor.
         default: 0.3
-    status: declared
+        minimum: 0.0
+        maximum: 100.0
+    engine_call:
+      steps:
+        - method: run_industrial_daynight_scenario
+          purpose: Apply the scenario and compare spatial statistics against the baseline.
+          parameter_map:
+            n_clusters: n_clusters
+            day_start_h: day_start_h
+            day_end_h: day_end_h
+            day_factor: day_factor
+            night_factor: night_factor
+      result_keys: [moran_comparison, lisa_comparison, midday_time_idx]
+    status: bound
 
   - capability_id: spatial_clustering_of_instability
     name: Spatial clustering workflow for instability
@@ -331,8 +613,8 @@ capabilities:
     analytical_goal: spatial_autocorrelation
     suitable_intents: [are unstable areas clustered, spatial cluster]
     description: >-
-      Declared workflow: RMS instability, then Global Moran and optional LISA.
-      Execution binding is added in a later phase.
+      Workflow: RMS instability on a bounded subset, then global Moran and LISA
+      on the same subset.
     required_data:
       - requirement_id: load_time_series
         kind: load_time_series
@@ -345,9 +627,50 @@ capabilities:
         optional: true
         description: SimBench code when the host has not already supplied a net.
     geoloadst_binding: geoloadst.api.InstabilityAnalyzer.compute_moran_analysis
-    output_semantics: Instability field plus global Moran and LISA cluster codes
+    output_semantics: Global Moran of instability plus LISA cluster codes and their labels
     units: mixed
     limitations:
-      - Workflow selection is catalog-only; the host must not invent extra steps.
+      - Workflow steps are fixed by the catalog; the host must not insert extra steps.
+      - Moran and LISA run on the subset the instability step selected, not on the full case.
+    parameters:
+      - name: max_buses
+        description: Upper bound on buses shared by both steps.
+        default: 500
+        minimum: 8
+        maximum: 5000
+      - name: max_times
+        description: Upper bound on time steps.
+        default: 96
+        minimum: 4
+        maximum: 35040
+      - name: unstable_quantile
+        description: Quantile marking critical nodes in the instability step.
+        default: 0.9
+        minimum: 0.5
+        maximum: 0.999
+      - name: k_neighbors
+        description: Number of nearest neighbors for spatial weights.
+        default: 8
+        minimum: 2
+        maximum: 50
+      - name: permutations
+        description: Permutation count for inference.
+        default: 999
+        minimum: 0
+        maximum: 9999
+    engine_call:
+      steps:
+        - method: compute_spatiotemporal_instability
+          purpose: Score instability on a bounded subset of buses and times.
+          parameter_map:
+            max_buses: max_buses
+            max_times: max_times
+            unstable_quantile: unstable_quantile
+        - method: compute_moran_analysis
+          purpose: Test whether the instability field is spatially clustered.
+          parameter_map:
+            k_neighbors: k_neighbors
+            permutations: permutations
+      result_keys: [moran_instability, clusters_instability, cluster_labels_map]
     prerequisites: [load_instability_rms, global_moran_instability, lisa_instability]
-    status: declared
+    status: bound

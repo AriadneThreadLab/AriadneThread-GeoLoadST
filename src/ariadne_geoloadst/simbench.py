@@ -1,13 +1,16 @@
 """Thin SimBench data-provider boundary.
 
 SimBench is a dataset, not an Overpass-style geographic query API.
-This module does not reimplement GeoLoadST loaders. When scientific extras
-are installed it will delegate to ``geoloadst.io.load_simbench_network``.
+This module does not reimplement GeoLoadST loaders; it delegates to
+``geoloadst.io.load_simbench_network`` and adds only discovery and provenance.
 """
 
 from __future__ import annotations
 
+from typing import Any
+
 from ariadne_geoloadst.compatibility import probe_geoloadst
+from ariadne_geoloadst.engine import EngineExecutionError, EngineNotAvailableError
 
 
 class SimBenchProvider:
@@ -21,6 +24,25 @@ class SimBenchProvider:
 
     def can_load(self) -> bool:
         return probe_geoloadst().status == "available"
+
+    def load_network(self, code: str) -> Any:
+        """Return a ``pandapowerNet`` built by GeoLoadST's own SimBench adapter.
+
+        The network object is passed straight to the engine; this package never
+        inspects or edits its electrical content.
+        """
+        try:
+            from geoloadst.io import load_simbench_network
+        except ImportError as exc:  # pragma: no cover - exercised only without the extra
+            raise EngineNotAvailableError(
+                "GeoLoadST is not installed, so SimBench cases cannot be loaded"
+            ) from exc
+        try:
+            return load_simbench_network(code)
+        except Exception as exc:
+            raise EngineExecutionError(
+                f"GeoLoadST could not load SimBench case {code!r}: {exc}"
+            ) from exc
 
     def describe_limitation(self) -> str:
         return (

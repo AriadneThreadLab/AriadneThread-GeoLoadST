@@ -30,12 +30,14 @@ classifiers = [
 dependencies = [
     "pydantic>=2.7,<3",
     "pyyaml>=6,<7",
+    # Package name and import path are both ``geoloadst``
+    # (https://github.com/GeoLoadSTLab/geoloadst). Do not pin a local path.
+    "geoloadst @ git+https://github.com/GeoLoadSTLab/geoloadst.git@v0.1.1",
 ]
 
 [project.optional-dependencies]
-# Scientific engine. Do not pin a local filesystem path here.
-# Local development: pip install -e ../geoloadst
-# Reproducible install: pip install -e ".[scientific]"
+# Alias kept so existing ``pip install -e ".[scientific]"`` commands still work.
+# The engine is now a default dependency of ``pip install -e .``.
 scientific = [
     "geoloadst @ git+https://github.com/GeoLoadSTLab/geoloadst.git@v0.1.1",
 ]
@@ -80,3 +82,9 @@ strict = true
 warn_unused_configs = true
 mypy_path = "src"
 files = ["src", "tests"]
+
+# The scientific engine is an optional extra and ships no stubs. It is imported
+# lazily inside functions, so type checking must not require it to be present.
+[[tool.mypy.overrides]]
+module = ["geoloadst.*", "geoloadst"]
+ignore_missing_imports = true

@@ -1,7 +1,17 @@
 # Examples
 
-Phase 1 ships no live notebooks. After scientific binding (Phase 2), examples
-should:
+`load_instability_map_example.py` runs the spatial pipeline offline (or with
+GeoLoadST if installed) and writes `outputs/load_instability_map.geojson`.
+
+```bash
+./.venv/bin/python examples/load_instability_map_example.py
+```
+
+It does not open a browser. The host should attach the FeatureCollection to
+Ariadne's existing `AgentQueryResponse.geojson`. See
+[spatial-visualization.md](../docs/spatial-visualization.md).
+
+Later examples should also:
 
 1. Check `GeoLoadSTPlugin().is_available()`.
 2. Select a **registered** `capability_id`.

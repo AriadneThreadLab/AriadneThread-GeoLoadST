@@ -30,11 +30,15 @@ flowchart TB
 Dependency direction is one-way:
 
 ```
-AriadneThread  →  AriadneThread-GeoLoadST  →  GeoLoadST
+AriadneThread  →  import ariadne_geoloadst  →  AriadneThread-GeoLoadST  →  GeoLoadST
 ```
 
-This package **must not** import Ariadne's `app` package. Ariadne may later
-depend on this package as an optional extra. GeoLoadST remains independently
+Ariadne calls the public functions `get_capabilities()` and
+`analyze(network_id, capability_id, network_data)`. The first host-facing
+capability is `moran_lisa` (catalog id `lisa_instability`).
+
+This package **must not** import Ariadne's `app` package. Ariadne installs this
+package (`pip install -e .`) and imports it. GeoLoadST remains independently
 versioned.
 
 ## 2. Responsibility boundaries
@@ -68,7 +72,7 @@ metric catalog inside Ariadne for energy.
 | Indicator Catalog (`app/indicators`) | YAML `indicator_id` → `method_id` | **EXTEND later** with `energy_grid` domain entries that *bind* to plugin capability ids |
 | Method registry (`app/analytics/methods`) | Closed OSM computations | **NOT NEEDED** for GeoLoadST math |
 | Metric Catalog | Count, density, coverage, … | **REUSE** only if a later mapping to UI comparison widgets is useful |
-| Tool Registry | Only registered tools run | **EXTEND later** with one host tool, e.g. `analyze_energy_grid`, whose args are this package's `ExecutionRequest` |
+| Tool Registry | Only registered tools run | **EXTEND** with `analyze_energy_grid`, which calls `analyze()` |
 | Data requirement planner | OSM tags + place_ref | **EXTEND** with energy requirement kinds from this catalog |
 | Comparison executor | OSM multi-target indicators | **REUSE** orchestration style; do not put pandapower inside it |
 | `AnalysisDecisionTrace` | Domain, candidates, selected indicator | **EXTEND** with plugin provenance fields |
@@ -119,12 +123,16 @@ This plugin does **not** repeat those pins unless a host-only helper needs them.
 src/ariadne_geoloadst/
   schemas.py          closed Pydantic contracts
   data/capabilities.yaml
-  capabilities.py     loader
-  registry.py         id lookup; unknown ids fail
+  capabilities.py     catalog loader + CapabilityRegistry
+  registry.py         compatibility alias
   compatibility.py    is_available / version range
-  adapter.py          GeoLoadSTPlugin
+  adapter.py          GeoLoadSTPlugin (validate, dispatch, provenance)
+  engine.py           lazy InstabilityAnalyzer binding
+  normalization.py    JSON-safe reshape of engine outputs
   provenance.py       structured metadata
   simbench.py         data-provider facade
+  geometry.py         electrical model → SpatialNetwork
+  visualization.py    SpatialNetwork + outputs → GeoJSON
 ```
 
 `GeoLoadSTPlugin.is_available()` distinguishes:
@@ -138,9 +146,18 @@ src/ariadne_geoloadst/
 
 Application startup of Ariadne must not fail on `package_missing`.
 
-Phase 1 `execute()` validates the capability and returns `unavailable` or
-`not_bound`. It does **not** yet call `InstabilityAnalyzer`. That binding is
-Phase 2.
+`execute()` validates the capability, then:
+
+| Status | Meaning |
+|---|---|
+| `unavailable` | GeoLoadST (or a required scientific extra) is missing |
+| `not_bound` | Catalogued, but no `InstabilityAnalyzer` plan yet |
+| `rejected` | Required SimBench-backed inputs are missing |
+| `engine_error` | GeoLoadST raised; the original error is chained |
+| `completed` | Engine ran; outputs are normalized engine values plus optional GeoJSON |
+
+This is the **initial integration foundation**. It is not a complete
+energy-analysis product.
 
 ## 6. Capability registry design
 
@@ -175,9 +192,11 @@ SimBench provider (network code, optional ROI, time window)
       ↓
 Canonical input {net | load_df, coords, bus_ids}
       ↓
-GeoLoadSTPlugin.validate → GeoLoadST InstabilityAnalyzer (Phase 2)
+GeoLoadSTPlugin.validate → GeoLoadST InstabilityAnalyzer
       ↓
-Normalized result + provenance → Ariadne AnalysisBlock / report / map
+Normalized scalars + GeoJSON FeatureCollection + provenance
+      ↓
+Ariadne AnalysisBlock / AgentQueryResponse.geojson / existing map viewer
 ```
 
 OSM Overpass stays on the geographic-feature path. It is not used to invent
@@ -236,13 +255,14 @@ Report without dumping GeoLoadST internals (`NetworkX.Graph` objects, raw
 
 | Context | Command |
 |---|---|
-| Plugin only (OSM host unaffected) | `pip install -e .` |
+| Plugin + engine | `pip install -e .` (installs `geoloadst` from the pinned GitHub tag) |
 | Local science development | `pip install -e .` and `pip install -e ../geoloadst` |
-| Reproducible / CI | `pip install -e ".[scientific]"` which pins `geoloadst @ git+…@v0.1.1` |
+| Alias | `pip install -e ".[scientific]"` (same `geoloadst` pin) |
 
 Do not put a machine-local path in `pyproject.toml`.
 
-`scientific` extra is optional. Unit tests run without GeoLoadST.
+The package name and import path are both `geoloadst`. The plugin still
+imports that engine lazily so listing capabilities does not load it.
 
 ## 12. Version compatibility
 
@@ -283,7 +303,8 @@ Offline unit tests (this repo):
 - import and `is_available()` without GeoLoadST
 - catalog discovery and unknown-id rejection
 - undeclared parameter rejection
-- provenance shape
+- provenance shape (no chain-of-thought)
+- adapter contract against a fake `InstabilityAnalyzer`
 - SimBench-is-not-Overpass wording
 
 Later phases:
@@ -303,11 +324,13 @@ engines out of Ariadne core.
 
 | Phase | Work | Status |
 |---|---|---|
-| 1 | Repository, catalog, availability, provenance, docs | **this commit** |
-| 2 | Bind `InstabilityAnalyzer` / core functions; normalize outputs | not started |
+| 1 | Repository, catalog, availability, provenance, docs | done |
+| 2 | Bind `InstabilityAnalyzer` plans; normalize outputs | **initial foundation** |
 | 3 | SimBench load via GeoLoadST I/O + fixture tests | not started |
 | 4 | Ariadne optional extra, `energy_grid` domain, one Tool Registry tool | not started |
 | 5 | UI report / map of bus points + limitations | not started |
+
+Current public status: **Initial integration foundation under active development.**
 
 ## 18. Repository creation and local setup
 

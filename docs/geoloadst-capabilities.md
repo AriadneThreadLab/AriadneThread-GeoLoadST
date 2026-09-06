@@ -1,9 +1,11 @@
 # GeoLoadST capability inventory
 
-Source: GeoLoadST repository
-[GeoLoadSTLab/geoloadst](https://github.com/GeoLoadSTLab/geoloadst), inspected
-`main` commit `079dc2cb` (tags `v0.1.0`, `v0.1.1`). Package version string is
-`0.1.0`. This list is taken from the Python modules, not from marketing text.
+Inspection source: [GeoLoadSTLab/geoloadst](https://github.com/GeoLoadSTLab/geoloadst),
+local clone of `main` at commit `079dc2cb` (tags `v0.1.0`, `v0.1.1`).
+The installed package version string is `0.1.0`.
+
+This list is taken from the Python modules. Marketing text and visualization
+helpers are not treated as scientific capabilities. Nothing below is invented.
 
 Public import:
 
@@ -11,114 +13,337 @@ Public import:
 from geoloadst import InstabilityAnalyzer
 ```
 
-## Engine entry points
+`geoloadst.__init__` exports only `InstabilityAnalyzer` and `__version__`.
 
-| Binding | Inputs | Outputs | Notes |
-|---|---|---|---|
-| `InstabilityAnalyzer.prepare_data` | `pandapowerNet`, optional ROI bbox or `roi_fraction`, `time_window`, `dt_minutes` | `bus_ids`, `coords`, `bus_load_df` | Uses `geoloadst.io` |
-| `compute_spatiotemporal_instability` | prepared data; `max_buses`, `max_times`, `max_pairs` | RMS index, critical mask, STV dict | Subsamples high-mean-load buses |
-| `compute_directional_variograms` | coords + instability field | ranges, major/minor azimuth, ellipse axes | Requires prior instability |
-| `compute_local_anisotropy` | critical subset + local lags | local ellipse parameters | |
-| `compute_multidim_instability` | load table | features, PCA, KMeans, cluster summary | Voltage flags not passed |
-| `compute_moran_analysis` | coords + load + instability | Global Moran + LISA for mean load and instability | KNN weights |
-| `run_industrial_daynight_scenario` | load + coords | scaled profiles, Moran/LISA comparison | Synthetic scenario |
-| `compute_topology_analysis` | `net` + instability | degree/betweenness/closeness + correlations | NetworkX |
-| `run_full_workflow` | many knobs | combined dict | Convenience wrapper |
-| `get_summary` | accumulated results | per-bus `DataFrame` | |
+---
 
-## Instability primitives
+## Package structure
 
-| Function | File | Required input | Output | Limitation |
-|---|---|---|---|---|
-| `rms_instability` | `core/instability_index.py` | standardized `(N, T)` | per-node RMS | Load fluctuation, not transient stability |
-| `rate_of_change` | same | `(N, T)` | mean abs first difference | **Not** RoCoF |
-| `oscillation_rate` | same | `(N, T)` | sign-change fraction | Not modal analysis |
-| `oscillation_rate_from_diff` | same | `(N, T)` | sign flips of diffs | |
-| `classify_critical_nodes` | same | instability vector, quantile or threshold | mask, indices, threshold | “Critical” = high score |
+```text
+geoloadst/
+  __init__.py                 public export
+  api.py                      InstabilityAnalyzer
+  io/simbench_adapter.py      SimBench / pandapower I/O
+  core/
+    preprocessing.py          detrend_and_standardize
+    instability_index.py      RMS, RoCoL, oscillation, critical nodes
+    spatiotemporal.py         STV, directional and local variograms
+    moran.py                  KNN weights, global Moran, LISA
+    topology.py               graph, centralities, correlation
+    resilience.py             scenario compare, vulnerability blend
+    multidim_instability.py   features, PCA, KMeans
+    roi.py                    bbox / centre-fraction helpers
+  scenarios/industrial_daynight.py
+  viz/                        plots and maps (out of plugin scope)
+```
 
-`detrend_and_standardize` (`core/preprocessing.py`) is a prerequisite for the
-RMS path used by the analyzer.
+---
 
-## Spatial statistics
+## Input formats
 
-| Function | File | Input | Output |
-|---|---|---|---|
-| `build_knn_weights` | `core/moran.py` | coords, `k` | libpysal weights |
-| `global_moran` | same | value vector + W | Moran object |
-| `local_moran` / `local_moran_clusters` | same | value vector + W | LISA / class codes |
-| `classify_lisa_clusters` | same | LISA | 0=NS, 1=HH, 2=LL, 3=LH, 4=HL |
-| `moran_time_series` | same | load `DataFrame` + W | I per time step |
-| `moran_analysis_summary` | same | mean load + instability + W | both global and local results |
+GeoLoadST does not accept a city name or an OSM query.
 
-## Spatio-temporal and anisotropy
-
-| Function | File | Output |
+| Input | Source | Shape / meaning |
 |---|---|---|
-| `compute_stv` | `core/spatiotemporal.py` | space/time ranges, marginal variograms (`Vx`/`Vt` aliases) |
-| `compute_directional_variograms` | same | per-azimuth ranges, major/minor azimuth |
-| `compute_local_variograms` | same | local directional structure |
+| `pandapowerNet` | `geoloadst.io.load_simbench_network(code)` | SimBench case with `net.profiles["load"]` |
+| Bus coordinates | `extract_bus_coordinates` | `(N, 2)` from `bus_geodata` or `bus.geo` |
+| Load time series | `build_bus_load_timeseries` | `DataFrame` time × bus; relative profile × `p_mw`, summed per bus |
+| ROI | constructor `roi=(xmin, xmax, ymin, ymax)` or `roi_fraction` | Filter on the case's own coordinates |
+| Time window | constructor `time_window=(start, end)` | Slice of the profile; default `(0, 96)` |
+| `dt_minutes` | constructor, default `15.0` | Used for hours conversion and day/night hours |
 
-Pair counts are bounded (`max_pairs`). Ranges are geostatistical, not electrical.
+Documented example code: `1-complete_data-mixed-all-1-sw`.
 
-## Topology
+Networks without `net.profiles["load"]` raise in `load_simbench_network`.
 
-| Function | File | Output |
-|---|---|---|
-| `build_network_graph` | `core/topology.py` | NetworkX graph from lines (+ trafos) |
-| `compute_topological_metrics` | same | degree, betweenness, closeness |
-| `correlate_instability_topology` | same | Pearson r vs each centrality |
-| `get_neighbors_isotropic` / `get_neighbors_directional` | same | neighbor indices |
+---
 
-Weights use `length_km` when present, not impedance.
+## Output formats
 
-## Multidimensional
+Analyzer methods return Python `dict` values. Typical payloads:
 
-| Function | File | Notes |
-|---|---|---|
-| `build_instability_features` | `core/multidim_instability.py` | `load_rms`, `roc_mean`, `osc_rate`; optional `voltage_std` / `voltage_sag` if the caller supplies arrays |
-| `pca_and_cluster` | same | PCA + KMeans |
-| `cluster_feature_summary` | same | per-cluster means |
+- `numpy.ndarray` (instability scores, masks, coordinates, cluster codes)
+- `pandas.DataFrame` (load tables, `get_summary`)
+- `esda.Moran` / `Moran_Local` objects
+- nested dicts (`stv`, `pca_results`, scenario comparisons)
+- opaque handles (`libpysal` weights, NetworkX graph, GeoPandas frames)
 
-Voltage is **not** produced by SimBench load profiles in the default analyzer
-path. Do not register it as a supported standalone capability until a data
-provider actually supplies those arrays.
+This plugin normalizes those values. It does not recompute them.
 
-## Scenario / resilience
+---
 
-| Function | File | Output |
-|---|---|---|
-| `compare_scenarios` | `core/resilience.py` | delta, ratio, pct_change for shared numeric keys |
-| `vulnerability_index` | same | `0.5 * norm(instability) + 0.5 * norm(degree)` by default |
-| `critical_node_summary` | same | top-n table |
-| `apply_industrial_daynight_pattern` | `scenarios/industrial_daynight.py` | scaled industrial cluster |
-| `compare_scenario_moran` / `compute_scenario_lisa_comparison` | same | baseline vs scenario spatial stats |
-
-## SimBench I/O (data, not analysis)
+## SimBench integration
 
 | Function | Role |
 |---|---|
-| `load_simbench_network(code)` | `simbench.get_simbench_net`; requires `net.profiles["load"]` |
+| `load_simbench_network(code)` | `simbench.get_simbench_net`; requires load profiles |
 | `extract_bus_coordinates` | `bus_geodata` or `bus.geo` |
-| `select_roi_buses` | bbox filter |
+| `select_roi_buses` | bbox or centred fraction |
 | `build_bus_load_timeseries` | relative profiles × `p_mw`, summed per bus |
 
-Documented example code in GeoLoadST README:
-`1-complete_data-mixed-all-1-sw`.
+SimBench is a **named dataset**, not Overpass. A code is not “the power
+network of an arbitrary city”.
 
-## Visualization (out of plugin scope)
+---
 
-`geoloadst.viz.plots` and `geoloadst.viz.maps` are plotting helpers. The plugin
-should return data; Ariadne/UI decide rendering. Optional viz extras
-(`geopandas`, `shapely`, `contextily`) are not required for analysis.
+## Dependency requirements
 
-## Not implemented as first-class GeoLoadST science
+From GeoLoadST `pyproject.toml`:
+
+Required: `numpy`, `pandas`, `matplotlib`, `scipy`, `scikit-learn`,
+`pandapower`, `simbench`, `scikit-gstat`, `libpysal`, `esda`, `networkx`.
+
+Optional viz extra: `geopandas`, `shapely`, `contextily`. Not required for
+analysis. This plugin does not depend on the viz extra.
+
+Python: GeoLoadST declares `>=3.9`. This plugin stays on 3.10 to match Ariadne.
+
+---
+
+## Engine entry points (`InstabilityAnalyzer`)
+
+| Method | Analytical purpose | Required inputs | Outputs | Limitations |
+|---|---|---|---|---|
+| `prepare_data` | Materialize buses, coords, load table | `net`, optional ROI / time window | `bus_ids`, `coords`, `bus_load_df` | Empty ROI raises |
+| `compute_spatiotemporal_instability` | Detrend, RMS score, critical mask, STV | prepared data | `instability_index`, `critical_*`, `threshold`, `stv`, `bus_ids_used` | Subsamples highest-mean-load buses; pair budget `max_pairs` |
+| `compute_directional_variograms` | Anisotropy of the instability field | prior instability (+ coords) | `ranges`, major/minor azimuth, `a_global` / `b_global` | Default azimuths 0/45/90/135 |
+| `compute_local_anisotropy` | Local ellipses around critical nodes | critical mask + instability | `local_iso`, `local_a`, `local_b`, `local_angle` | Only the first `max_crit_local` critical nodes |
+| `compute_multidim_instability` | RMS / RoCoL / osc features + PCA/KMeans | prepared load table | `feature_names`, `pca_results`, `cluster_summary` | Voltage flags are not passed |
+| `compute_moran_analysis` | Global Moran + LISA on mean load and instability | prepared data; instability computed if missing | `moran_*`, `clusters_*`, `cluster_labels_map`, weights | KNN on coordinates, not impedance |
+| `run_industrial_daynight_scenario` | Scale an industrial cluster and compare Moran/LISA | prepared load + coords | `moran_comparison`, `lisa_comparison`, `midday_time_idx` | Synthetic scaling, not a market study |
+| `compute_topology_analysis` | Degree / betweenness / closeness + Pearson vs instability | `net` + prepared buses | `metrics`, `correlations`, graph | Length-weighted graph, not impedance |
+| `run_full_workflow` | Convenience wrapper | many knobs | combined dict + optional GeoPandas | Not registered as a first-class plugin capability |
+| `get_summary` | Per-bus table of accumulated results | prior steps | `DataFrame` | Only columns that already exist |
+
+---
+
+## Catalogued capabilities
+
+Each row is a plugin `capability_id`. Bindings name callables that exist in
+the inspected tree. `status: bound` means `execute()` will replay a declared
+`InstabilityAnalyzer` plan. `status: declared` means the science exists in
+GeoLoadST but the analyzer has no dedicated method, so dispatch is withheld.
+
+### `load_instability_rms`
+
+| Field | Value |
+|---|---|
+| Capability name | RMS load instability |
+| Analytical purpose | Per-node RMS of temporally and spatially detrended load |
+| Required inputs | load time series, node coordinates |
+| Outputs | `instability_index`, `bus_ids_used`, `threshold` |
+| Limitations | Load-profile fluctuation, not transient or frequency stability; subsample bounds change the population |
+| GeoLoadST API | `geoloadst.core.instability_index.rms_instability` via `InstabilityAnalyzer.compute_spatiotemporal_instability` |
+| Status | bound |
+
+### `load_rate_of_change`
+
+| Field | Value |
+|---|---|
+| Capability name | Load rate of change |
+| Analytical purpose | Mean absolute first difference (RoCoL-style) |
+| Required inputs | load time series |
+| Outputs | per-node mean absolute temporal difference |
+| Limitations | Not Rate of Change of Frequency (RoCoF). Analyzer exposes it only inside the multidimensional feature matrix |
+| GeoLoadST API | `geoloadst.core.instability_index.rate_of_change` |
+| Status | declared |
+
+### `load_oscillation_rate`
+
+| Field | Value |
+|---|---|
+| Capability name | Load oscillation rate |
+| Analytical purpose | Fraction of sign changes in a node's series |
+| Required inputs | load time series |
+| Outputs | per-node rate in `[0, 1]` |
+| Limitations | Sign flips, not modal or protection oscillation. Analyzer exposes it only inside the feature matrix |
+| GeoLoadST API | `geoloadst.core.instability_index.oscillation_rate` |
+| Status | declared |
+
+### `critical_node_classification`
+
+| Field | Value |
+|---|---|
+| Capability name | Critical load-instability nodes |
+| Analytical purpose | Threshold the RMS instability distribution (default 90th percentile) |
+| Required inputs | load time series, node coordinates |
+| Outputs | `critical_mask`, `critical_indices`, `critical_bus_ids`, `threshold` |
+| Limitations | “Critical” means a high load-instability score, not N-1 or protection criticality |
+| GeoLoadST API | `geoloadst.core.instability_index.classify_critical_nodes` via `compute_spatiotemporal_instability` |
+| Status | bound |
+
+### `global_moran_instability`
+
+| Field | Value |
+|---|---|
+| Capability name | Global Moran I of load instability |
+| Analytical purpose | Test spatial autocorrelation of the RMS instability field |
+| Required inputs | node coordinates, load time series |
+| Outputs | `moran_instability`, `moran_mean_load` (Moran diagnostics) |
+| Limitations | KNN weights on coordinates, not electrical distance; p-values are permutation-based |
+| GeoLoadST API | `geoloadst.core.moran.global_moran` via `InstabilityAnalyzer.compute_moran_analysis` |
+| Status | bound |
+
+### `lisa_instability`
+
+| Field | Value |
+|---|---|
+| Capability name | Local Moran LISA of load instability |
+| Analytical purpose | Local hotspots / outliers of instability |
+| Required inputs | node coordinates, load time series |
+| Outputs | `clusters_instability`, `clusters_mean_load`, `cluster_labels_map` |
+| Limitations | Codes 0=NS, 1=HH, 2=LL, 3=LH, 4=HL. Statistical classes, not protection zones |
+| GeoLoadST API | `geoloadst.core.moran.local_moran_clusters` via `compute_moran_analysis` |
+| Status | bound |
+
+### `moran_time_series`
+
+| Field | Value |
+|---|---|
+| Capability name | Moran I time series of load |
+| Analytical purpose | Global Moran of each load snapshot |
+| Required inputs | load table, shared spatial weights |
+| Outputs | one Moran I per time step |
+| Limitations | Analyzer has no method; a caller must pass weights explicitly |
+| GeoLoadST API | `geoloadst.core.moran.moran_time_series` |
+| Status | declared |
+
+### `space_time_variogram`
+
+| Field | Value |
+|---|---|
+| Capability name | Space-time variogram of load anomalies |
+| Analytical purpose | Spatial and temporal correlation lengths of the detrended field |
+| Required inputs | detrended standardized load `(N, T)`, coordinates |
+| Outputs | `stv.space_range`, `stv.time_range_steps`, `stv.time_range_hours`, valid lag bounds |
+| Limitations | Pairwise STV is memory-heavy; GeoLoadST bounds buses, times, and pairs. Ranges are geostatistical, not electrical |
+| GeoLoadST API | `geoloadst.core.spatiotemporal.compute_stv` via `compute_spatiotemporal_instability` |
+| Status | bound |
+
+### `directional_variogram`
+
+| Field | Value |
+|---|---|
+| Capability name | Directional variogram of instability |
+| Analytical purpose | Major / minor azimuth of the instability field |
+| Required inputs | coordinates plus a prior instability field |
+| Outputs | `ranges`, `major_azimuth`, `minor_azimuth`, `a_global`, `b_global`, `angle_global` |
+| Limitations | Default azimuths are 0/45/90/135; they are not a catalog parameter |
+| GeoLoadST API | `geoloadst.core.spatiotemporal.compute_directional_variograms` via `InstabilityAnalyzer.compute_directional_variograms` |
+| Status | bound |
+
+### `local_anisotropy`
+
+| Field | Value |
+|---|---|
+| Capability name | Local anisotropy around critical nodes |
+| Analytical purpose | Local directional structure around the top critical buses |
+| Required inputs | coordinates, instability field, critical mask |
+| Outputs | `local_iso`, `local_a`, `local_b`, `local_angle` |
+| Limitations | Only the first few critical nodes are analysed; local k-NN depends on bus density |
+| GeoLoadST API | `geoloadst.core.spatiotemporal.compute_local_variograms` via `InstabilityAnalyzer.compute_local_anisotropy` |
+| Status | bound |
+
+### `topology_centrality`
+
+| Field | Value |
+|---|---|
+| Capability name | Network topology centrality |
+| Analytical purpose | Degree, betweenness, closeness on the line / transformer graph |
+| Required inputs | pandapower network |
+| Outputs | `metrics` (degree, betweenness, closeness) |
+| Limitations | Graph distance uses `length_km` when present, not impedance. Switching state is not modelled |
+| GeoLoadST API | `geoloadst.core.topology.compute_topological_metrics` via `compute_topology_analysis` |
+| Status | bound |
+
+### `instability_topology_correlation`
+
+| Field | Value |
+|---|---|
+| Capability name | Instability–topology correlation |
+| Analytical purpose | Pearson r between RMS instability and each centrality |
+| Required inputs | load time series, network topology |
+| Outputs | `correlations` |
+| Limitations | Linear association only. Zero-variance centrality yields NaN (reported as absent) |
+| GeoLoadST API | `geoloadst.core.topology.correlate_instability_topology` via `compute_topology_analysis` |
+| Status | bound |
+
+### `vulnerability_index`
+
+| Field | Value |
+|---|---|
+| Capability name | Instability–degree vulnerability index |
+| Analytical purpose | `0.5 * norm(instability) + 0.5 * norm(degree)` by default |
+| Required inputs | instability vector, degree vector |
+| Outputs | per-node blended score |
+| Limitations | A simple linear blend, not a published resilience standard. Analyzer has no method |
+| GeoLoadST API | `geoloadst.core.resilience.vulnerability_index` |
+| Status | declared |
+
+### `multidim_pca_clustering`
+
+| Field | Value |
+|---|---|
+| Capability name | Multidimensional instability PCA and clustering |
+| Analytical purpose | Mix RMS, RoCoL, and oscillation, then PCA and KMeans |
+| Required inputs | load time series |
+| Outputs | `feature_names`, `cluster_summary`, PCA labels and explained variance |
+| Limitations | Optional `voltage_std` / `voltage_sag` exist on `build_instability_features` but `InstabilityAnalyzer` does not pass them. Cluster count is a parameter |
+| GeoLoadST API | `geoloadst.core.multidim_instability.pca_and_cluster` via `compute_multidim_instability` |
+| Status | bound |
+
+### `industrial_daynight_scenario`
+
+| Field | Value |
+|---|---|
+| Capability name | Industrial day/night load scenario |
+| Analytical purpose | Scale a detected industrial cluster and compare Moran / LISA |
+| Required inputs | load time series, coordinates, optional day/night factors |
+| Outputs | `moran_comparison`, `lisa_comparison`, `midday_time_idx` |
+| Limitations | Synthetic profile scaling. The industrial cluster is KMeans on coordinates and mean load, not tariff data |
+| GeoLoadST API | `geoloadst.scenarios.industrial_daynight.apply_industrial_daynight_pattern` via `run_industrial_daynight_scenario` |
+| Status | bound |
+
+### `spatial_clustering_of_instability`
+
+| Field | Value |
+|---|---|
+| Capability name | Spatial clustering workflow for instability |
+| Analytical purpose | RMS instability on a bounded subset, then global Moran and LISA |
+| Required inputs | load time series, node coordinates, optional SimBench code |
+| Outputs | `moran_instability`, `clusters_instability`, `cluster_labels_map` |
+| Limitations | Workflow steps are fixed by the catalog. Moran/LISA run on the instability subset, not the full case |
+| GeoLoadST API | `InstabilityAnalyzer.compute_spatiotemporal_instability` then `compute_moran_analysis` |
+| Status | bound |
+
+---
+
+## Present in GeoLoadST, not registered as standalone plugin capabilities
+
+| Callable | Why it is not a first-class capability |
+|---|---|
+| `detrend_and_standardize` | Prerequisite of the RMS path, not a user-facing analysis |
+| `oscillation_rate_from_diff` | Variant of oscillation rate; analyzer does not expose it |
+| `compare_scenarios` / `critical_node_summary` | Helpers; no analyzer method |
+| `run_full_workflow` / `get_summary` | Convenience wrappers; plugin capabilities are the individual analyses |
+| `geoloadst.viz.*` | Plotting. The plugin returns data; Ariadne/UI decide rendering |
+| Voltage features | Only optional arguments on `build_instability_features`; not supplied by the analyzer |
+
+---
+
+## Not implemented as GeoLoadST science
 
 - Transient, frequency, or rotor-angle stability
 - Protection coordination
 - Arbitrary-city OSM → SimBench joining
 - A geographic query API equivalent to Overpass
+- PV suitability (no such module; a future catalog extension, not a GeoLoadST capability)
 
-## Mapping to this plugin's catalog
+---
+
+## Mapping to this plugin
 
 See `src/ariadne_geoloadst/data/capabilities.yaml`. Every `geoloadst_binding`
-in that file names a function or analyzer method listed above.
+names a function or analyzer method listed above. Adding a future domain
+(PV suitability, a second engine) is a new catalog file, not a change to the
+registry module.
